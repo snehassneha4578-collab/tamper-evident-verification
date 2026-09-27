@@ -255,6 +255,60 @@ def control_totals(
     return totals
 
 
+# Separator class: comma, space, no-break space (U+00A0), narrow no-break
+# space (U+202F) -- the grouping characters real-world exports emit.
+_GROUPED_NUMERIC_RE = re.compile(
+    r"^[+-]?\d{1,3}([,\u0020\u00a0\u202f]\d{3})+(\.\d+)?$"
+)
+
+
+def grouped_numeric_columns(records: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Return columns that look numeric but are excluded by grouping separators.
+
+    The rules intentionally mirror Node's groupedNumericColumns helper.
+    Returns [{"column": ..., "example": ...}] in first-seen column order.
+    """
+    columns = _columns(records)
+    norm_records = [
+        {normalize_header(k): v for k, v in record.items()} for record in records
+    ]
+
+    flagged: list[dict[str, str]] = []
+
+    for column in columns:
+        non_null: list[Any] = []
+        for record in norm_records:
+            value = record.get(column)
+            if normalize_cell(value) is not None:
+                non_null.append(value)
+
+        if not non_null:
+            continue
+
+        decimals = [_coerce_decimal(value) for value in non_null]
+        coercible = sum(decimal is not None for decimal in decimals)
+
+        # Already numeric (in numeric_sums): nothing to surface.
+        if coercible / len(non_null) >= _TYPE_THRESHOLD:
+            continue
+
+        grouped = 0
+        example: str | None = None
+        for value in non_null:
+            if not isinstance(value, str) or _coerce_decimal(value) is not None:
+                continue
+            stripped = value.strip()
+            if _GROUPED_NUMERIC_RE.fullmatch(stripped):
+                grouped += 1
+                if example is None:
+                    example = stripped
+
+        # Flag only if stripping separators would push the column over the
+        # numeric threshold -- fixing the data must actually make it numeric.
+        if grouped > 0 and (coercible + grouped) / len(non_null) >= _TYPE_THRESHOLD:
+            flagged.append({"column": column, "example": example or ""})
+
+    return flagged
 def _dict_at(totals: dict[str, Any], key: str) -> dict[str, Any]:
     """A column-keyed map from totals, tolerating absent or non-dict values."""
     value = totals.get(key)

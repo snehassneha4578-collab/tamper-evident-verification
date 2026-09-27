@@ -24,7 +24,7 @@ from tamper_signal.receipts import (
     verify_chain,
     verify_signature,
 )
-from tamper_signal.totals import control_totals
+from tamper_signal.totals import control_totals, grouped_numeric_columns
 from tamper_signal.wrapper import ChainTailMismatch, receipt_step
 
 from decimal import Decimal
@@ -475,6 +475,56 @@ def test_control_totals_accepts_non_normalized_keys():
     assert totals["column_count"] == 2
 
 
+def test_grouped_numeric_columns_names_excluded_column():
+    records = [
+        {"views": "289,084", "new_followers": "85,182"},
+        {"views": "1,198,372", "new_followers": "1,001"},
+    ]
+    flagged = grouped_numeric_columns(records)
+    assert sorted(item["column"] for item in flagged) == ["new_followers", "views"]
+    views = next(item for item in flagged if item["column"] == "views")
+    assert views["example"] == "289,084"
+
+
+def test_grouped_numeric_columns_detects_space_and_nbsp_grouping():
+    records = [
+        {"reach": "1 198 372"},
+        {"reach": "2\u00a0001\u00a0455"},
+        {"reach": "3\u202f114\u202f900"},
+    ]
+    flagged = grouped_numeric_columns(records)
+    assert [item["column"] for item in flagged] == ["reach"]
+
+
+def test_grouped_numeric_columns_ignores_genuinely_numeric_columns():
+    records = [
+        {"spend_usd": "2020283", "clicks": "6359340"},
+        {"spend_usd": "12.5", "clicks": "100"},
+    ]
+    assert grouped_numeric_columns(records) == []
+
+
+def test_grouped_numeric_columns_ignores_non_numeric_text():
+    records = [
+        {"name": "Acme, Inc.", "note": "q1, 2026"},
+        {"name": "Globex", "note": "rollup"},
+    ]
+    assert grouped_numeric_columns(records) == []
+
+
+def test_grouped_numeric_columns_below_threshold_is_not_flagged():
+    records = [{"label": f"item-{i}"} for i in range(9)]
+    records.append({"label": "1,234"})
+    assert grouped_numeric_columns(records) == []
+
+
+def test_grouped_numeric_columns_normalized_values_are_not_flagged():
+    raw = [{"views": "289,084"}, {"views": "1,198,372"}]
+    assert [item["column"] for item in grouped_numeric_columns(raw)] == ["views"]
+
+    normalized = [{"views": row["views"].replace(",", "")} for row in raw]
+    assert control_totals(normalized)["numeric_sums"]["views"] == "1487456"
+    assert grouped_numeric_columns(normalized) == []
 def test_verify_returns_false_on_malformed_hex():
     from tamper_signal.keys import verify
 
