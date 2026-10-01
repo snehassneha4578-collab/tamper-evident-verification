@@ -376,6 +376,41 @@ def test_ingest_does_not_warn_when_the_run_was_snapshotted(tmp_path, monkeypatch
     assert WARNING not in capsys.readouterr().err
 
 
+
+def test_ingest_warns_for_grouped_numeric_columns(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TAMPER_SIGNAL_KEY", raising=False)
+
+    generate_keys("keys")
+    (tmp_path / "export.csv").write_text(
+        'views,duration_sec\n"289,084",2400\n"1,198,372",1800\n',
+        encoding="utf-8",
+    )
+
+    assert main([
+        "ingest",
+        "export.csv",
+        "--origin",
+        "t",
+        "--key",
+        "keys/signing.key",
+        "--out",
+        "receipts/",
+        "--json",
+    ]) == 0
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert payload["row_count"] == 2
+    assert payload["column_count"] == 2
+
+    assert 'warning: column "views" looks numeric (e.g. "289,084") but is missing from numeric_sums.' in captured.err
+    assert 'column "duration_sec"' not in captured.err
+    assert "Grouped numbers don't parse as plain decimals" in captured.err
+    assert "numeric_sums -- a data-receipt-column on them can never flag a change." in captured.err
+    assert "strips the separators before ingest. Only plain decimals (no thousands grouping) are summed." in captured.err
+
 def test_first_ingest_into_a_fresh_directory_does_not_warn(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("TAMPER_SIGNAL_KEY", raising=False)
